@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, DollarSign } from 'lucide-react';
+import { Plus, Edit as Edit2, Trash2, DollarSign } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Service {

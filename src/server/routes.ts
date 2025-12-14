@@ -98,7 +98,7 @@ router.get('/customers', async (req: Request, res: Response) => {
     const pool = getPool();
     const result = await pool.request().query('SELECT * FROM customers ORDER BY created_at DESC');
     res.json(result.recordset as Customer[]);
-    console.log(result.recordset);
+    // console.log(result.recordset);
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Database error' });
   }

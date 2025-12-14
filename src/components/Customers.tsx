@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, Mail, Phone, Building } from 'lucide-react';
+import { Plus, Edit as Edit2, Trash2, Mail, Phone, Building } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Customer {
@@ -25,6 +25,8 @@ export function Customers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [formData, setFormData] = useState<CustomerForm>({
     name: '',
@@ -41,9 +43,10 @@ export function Customers() {
   async function loadCustomers() {
     try {
       const data = await api.customers.list();
-      setCustomers(data);
+      setCustomers(data as Customer[]);
     } catch (error) {
       console.error('Error loading customers:', error);
+      setErrorMessage('Failed to load customers. See console for details.');
     } finally {
       setLoading(false);
     }
@@ -51,6 +54,8 @@ export function Customers() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setErrorMessage(null);
     try {
       if (editingCustomer) {
         await api.customers.update(editingCustomer.id, formData);
@@ -58,9 +63,12 @@ export function Customers() {
         await api.customers.create(formData);
       }
       resetForm();
-      loadCustomers();
+      await loadCustomers();
     } catch (error) {
       console.error('Error saving customer:', error);
+      setErrorMessage('Failed to save customer. Check console or server logs.');
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -120,6 +128,11 @@ export function Customers() {
               {editingCustomer ? 'Edit Customer' : 'New Customer'}
             </h2>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {errorMessage && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded">
+                  {errorMessage}
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
                 <input
@@ -171,9 +184,10 @@ export function Customers() {
               <div className="flex gap-3 pt-4">
                 <button
                   type="submit"
-                  className="flex-1 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  disabled={submitting}
+                  className={`flex-1 px-6 py-2 rounded-lg transition-colors font-medium ${submitting ? 'bg-blue-400 text-white cursor-wait' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
                 >
-                  {editingCustomer ? 'Update' : 'Create'} Customer
+                  {submitting ? (editingCustomer ? 'Updating…' : 'Creating…') : (editingCustomer ? 'Update' : 'Create') + ' Customer'}
                 </button>
                 <button
                   type="button"

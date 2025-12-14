@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Eye, CreditCard as Edit2, Trash2, FileText } from 'lucide-react';
+import { Plus, Eye, Edit as Edit2, Trash2, FileText } from 'lucide-react';
 import { api } from '../lib/api';
 import { QuotationForm } from './QuotationForm';
 import { QuotationView } from './QuotationView';

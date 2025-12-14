@@ -27,8 +27,10 @@ async function start() {
   try {
     await initializeDatabase();
 
-    app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+    const HOST = process.env.HOST || '0.0.0.0';
+    app.listen(PORT, HOST, () => {
+      const displayHost = HOST === '0.0.0.0' ? '0.0.0.0' : HOST;
+      console.log(`Server running on http://${displayHost}:${PORT}`);
     });
 
     process.on('SIGINT', async () => {

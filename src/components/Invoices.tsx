@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Eye, CreditCard as Edit2, Trash2, Receipt } from 'lucide-react';
+import { Plus, Eye, Edit as Edit2, Trash2, Receipt } from 'lucide-react';
 import { api } from '../lib/api';
 import { InvoiceForm } from './InvoiceForm';
 import { InvoiceView } from './InvoiceView';
