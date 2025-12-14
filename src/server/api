@@ -1,0 +1,825 @@
+// ============================================
+// 1. package.json
+// ============================================
+{
+  "name": "invoicing-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint src --ext .ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mssql": "^10.0.1",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "joi": "^17.11.0",
+    "winston": "^3.11.0",
+    "compression": "^1.7.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/mssql": "^9.1.4",
+    "@types/cors": "^2.8.17",
+    "@types/compression": "^1.7.5",
+    "@types/node": "^20.10.5",
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0"
+  }
+}
+
+// ============================================
+// 2. tsconfig.json
+// ============================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "lib": ["ES2022"],
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+
+// ============================================
+// 3. .env.example
+// ============================================
+// Copy this to .env and fill in your values
+NODE_ENV=development
+PORT=3000
+
+# Database Configuration
+DB_USER=your_username
+DB_PASSWORD=your_password
+DB_SERVER=localhost
+DB_DATABASE=InvoicingDB
+DB_PORT=1433
+DB_ENCRYPT=true
+DB_TRUST_SERVER_CERTIFICATE=true
+
+# Security
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX_REQUESTS=100
+
+# Logging
+LOG_LEVEL=info
+
+// ============================================
+// 4. src/config/index.ts
+// ============================================
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const config = {
+  env: process.env.NODE_ENV || 'development',
+  port: parseInt(process.env.PORT || '3000', 10),
+  database: {
+    user: process.env.DB_USER || '',
+    password: process.env.DB_PASSWORD || '',
+    server: process.env.DB_SERVER || 'localhost',
+    database: process.env.DB_DATABASE || 'InvoicingDB',
+    port: parseInt(process.env.DB_PORT || '1433', 10),
+    options: {
+      encrypt: process.env.DB_ENCRYPT === 'true',
+      trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
+      enableArithAbort: true,
+      connectTimeout: 30000,
+      requestTimeout: 30000,
+    },
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000,
+    },
+  },
+  rateLimit: {
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  },
+  logging: {
+    level: process.env.LOG_LEVEL || 'info',
+  },
+};
+
+// ============================================
+// 5. src/utils/logger.ts
+// ============================================
+import winston from 'winston';
+import { config } from '../config/index.js';
+
+const logger = winston.createLogger({
+  level: config.logging.level,
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' }),
+  ],
+});
+
+if (config.env !== 'production') {
+  logger.add(
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      ),
+    })
+  );
+}
+
+export default logger;
+
+// ============================================
+// 6. src/db/index.ts
+// ============================================
+import sql from 'mssql';
+import { config } from '../config/index.js';
+import logger from '../utils/logger.js';
+
+let pool: sql.ConnectionPool | null = null;
+
+export async function connectDB(): Promise<sql.ConnectionPool> {
+  try {
+    if (pool) {
+      return pool;
+    }
+
+    pool = await sql.connect(config.database);
+    logger.info('Database connected successfully');
+    
+    // Handle connection errors
+    pool.on('error', (err) => {
+      logger.error('Database pool error:', err);
+      pool = null;
+    });
+
+    return pool;
+  } catch (error) {
+    logger.error('Database connection failed:', error);
+    throw error;
+  }
+}
+
+export function getPool(): sql.ConnectionPool {
+  if (!pool) {
+    throw new Error('Database not initialized. Call connectDB first.');
+  }
+  return pool;
+}
+
+export async function closeDB(): Promise<void> {
+  try {
+    if (pool) {
+      await pool.close();
+      pool = null;
+      logger.info('Database connection closed');
+    }
+  } catch (error) {
+    logger.error('Error closing database connection:', error);
+    throw error;
+  }
+}
+
+// ============================================
+// 7. src/middleware/errorHandler.ts
+// ============================================
+import { Request, Response, NextFunction } from 'express';
+import logger from '../utils/logger.js';
+
+export interface ApiError extends Error {
+  statusCode?: number;
+  isOperational?: boolean;
+}
+
+export class AppError extends Error implements ApiError {
+  statusCode: number;
+  isOperational: boolean;
+
+  constructor(message: string, statusCode: number = 500) {
+    super(message);
+    this.statusCode = statusCode;
+    this.isOperational = true;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+export const errorHandler = (
+  err: ApiError,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
+
+  logger.error('Error:', {
+    message: err.message,
+    statusCode,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+  });
+
+  res.status(statusCode).json({
+    success: false,
+    error: {
+      message,
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    },
+  });
+};
+
+export const notFoundHandler = (req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: {
+      message: `Route ${req.originalUrl} not found`,
+    },
+  });
+};
+
+// ============================================
+// 8. src/middleware/validation.ts
+// ============================================
+import { Request, Response, NextFunction } from 'express';
+import Joi from 'joi';
+import { AppError } from './errorHandler.js';
+
+export const validate = (schema: Joi.ObjectSchema) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const { error } = schema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true,
+    });
+
+    if (error) {
+      const message = error.details.map((detail) => detail.message).join(', ');
+      throw new AppError(message, 400);
+    }
+
+    next();
+  };
+};
+
+// ============================================
+// 9. src/validation/schemas.ts
+// ============================================
+import Joi from 'joi';
+
+export const customerSchema = Joi.object({
+  name: Joi.string().required().min(1).max(255),
+  email: Joi.string().email().allow(null, '').optional(),
+  phone: Joi.string().allow(null, '').optional(),
+  company: Joi.string().allow(null, '').optional(),
+  address: Joi.string().allow(null, '').optional(),
+});
+
+export const serviceSchema = Joi.object({
+  name: Joi.string().required().min(1).max(255),
+  description: Joi.string().allow(null, '').optional(),
+  unit_price: Joi.number().min(0).required(),
+  unit: Joi.string().default('unit'),
+});
+
+export const quotationSchema = Joi.object({
+  customer_id: Joi.string().uuid().required(),
+  quotation_number: Joi.string().required(),
+  date: Joi.date().iso().optional(),
+  valid_until: Joi.date().iso().allow(null).optional(),
+  status: Joi.string().valid('draft', 'sent', 'accepted', 'rejected').default('draft'),
+  notes: Joi.string().allow(null, '').optional(),
+  total: Joi.number().min(0).default(0),
+});
+
+export const quotationItemSchema = Joi.object({
+  quotation_id: Joi.string().uuid().required(),
+  service_id: Joi.string().uuid().allow(null).optional(),
+  description: Joi.string().required(),
+  quantity: Joi.number().min(0).required(),
+  unit_price: Joi.number().min(0).required(),
+  total: Joi.number().min(0).required(),
+});
+
+export const invoiceSchema = Joi.object({
+  customer_id: Joi.string().uuid().required(),
+  quotation_id: Joi.string().uuid().allow(null).optional(),
+  invoice_number: Joi.string().required(),
+  date: Joi.date().iso().optional(),
+  due_date: Joi.date().iso().allow(null).optional(),
+  status: Joi.string().valid('draft', 'sent', 'paid', 'overdue', 'cancelled').default('draft'),
+  notes: Joi.string().allow(null, '').optional(),
+  total: Joi.number().min(0).default(0),
+});
+
+export const invoiceItemSchema = Joi.object({
+  invoice_id: Joi.string().uuid().required(),
+  service_id: Joi.string().uuid().allow(null).optional(),
+  description: Joi.string().required(),
+  quantity: Joi.number().min(0).required(),
+  unit_price: Joi.number().min(0).required(),
+  total: Joi.number().min(0).required(),
+});
+
+// ============================================
+// 10. src/middleware/asyncHandler.ts
+// ============================================
+import { Request, Response, NextFunction } from 'express';
+
+export const asyncHandler = (fn: Function) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+// ============================================
+// 11. src/routes/index.ts (Updated with validation)
+// ============================================
+import express from 'express';
+import sql from 'mssql';
+import { getPool } from '../db/index.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { validate } from '../middleware/validation.js';
+import {
+  customerSchema,
+  serviceSchema,
+  quotationSchema,
+  quotationItemSchema,
+  invoiceSchema,
+  invoiceItemSchema,
+} from '../validation/schemas.js';
+
+const router = express.Router();
+
+// Health check
+router.get('/health', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request().query('SELECT 1 as connected');
+  res.json({ 
+    status: 'ok', 
+    database: 'connected', 
+    timestamp: new Date().toISOString() 
+  });
+}));
+
+// Customers
+router.get('/customers', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .query('SELECT * FROM customers ORDER BY created_at DESC');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/customers', validate(customerSchema), asyncHandler(async (req, res) => {
+  const { name, email, phone, company, address } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('name', sql.NVarChar, name)
+    .input('email', sql.NVarChar, email || null)
+    .input('phone', sql.NVarChar, phone || null)
+    .input('company', sql.NVarChar, company || null)
+    .input('address', sql.NVarChar, address || null)
+    .query(`INSERT INTO customers (id, name, email, phone, company, address) 
+            VALUES (@id, @name, @email, @phone, @company, @address)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.get('/customers/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('SELECT * FROM customers WHERE id = @id');
+  
+  if (result.recordset.length === 0) {
+    return res.status(404).json({ success: false, error: 'Customer not found' });
+  }
+  
+  res.json({ success: true, data: result.recordset[0] });
+}));
+
+router.put('/customers/:id', validate(customerSchema), asyncHandler(async (req, res) => {
+  const { name, email, phone, company, address } = req.body;
+  const pool = getPool();
+
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .input('name', sql.NVarChar, name)
+    .input('email', sql.NVarChar, email || null)
+    .input('phone', sql.NVarChar, phone || null)
+    .input('company', sql.NVarChar, company || null)
+    .input('address', sql.NVarChar, address || null)
+    .query(`UPDATE customers 
+            SET name = @name, email = @email, phone = @phone, 
+                company = @company, address = @address, updated_at = GETUTCDATE() 
+            WHERE id = @id`);
+
+  res.json({ success: true, data: { rowsAffected: result.rowsAffected[0] } });
+}));
+
+router.delete('/customers/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM customers WHERE id = @id');
+
+  res.json({ success: true, data: { rowsAffected: result.rowsAffected[0] } });
+}));
+
+// Services
+router.get('/services', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .query('SELECT * FROM services ORDER BY created_at DESC');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/services', validate(serviceSchema), asyncHandler(async (req, res) => {
+  const { name, description, unit_price, unit } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('name', sql.NVarChar, name)
+    .input('description', sql.NVarChar, description || null)
+    .input('unit_price', sql.Decimal(10, 2), unit_price)
+    .input('unit', sql.NVarChar, unit || 'unit')
+    .query(`INSERT INTO services (id, name, description, unit_price, unit) 
+            VALUES (@id, @name, @description, @unit_price, @unit)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.get('/services/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('SELECT * FROM services WHERE id = @id');
+  
+  if (result.recordset.length === 0) {
+    return res.status(404).json({ success: false, error: 'Service not found' });
+  }
+  
+  res.json({ success: true, data: result.recordset[0] });
+}));
+
+router.put('/services/:id', validate(serviceSchema), asyncHandler(async (req, res) => {
+  const { name, description, unit_price, unit } = req.body;
+  const pool = getPool();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .input('name', sql.NVarChar, name)
+    .input('description', sql.NVarChar, description || null)
+    .input('unit_price', sql.Decimal(10, 2), unit_price)
+    .input('unit', sql.NVarChar, unit || 'unit')
+    .query(`UPDATE services 
+            SET name = @name, description = @description, 
+                unit_price = @unit_price, unit = @unit, updated_at = GETUTCDATE() 
+            WHERE id = @id`);
+
+  res.json({ success: true });
+}));
+
+router.delete('/services/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM services WHERE id = @id');
+
+  res.json({ success: true });
+}));
+
+// Quotations
+router.get('/quotations', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .query('SELECT * FROM quotations ORDER BY created_at DESC');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/quotations', validate(quotationSchema), asyncHandler(async (req, res) => {
+  const { customer_id, quotation_number, date, valid_until, status, notes, total } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('customer_id', sql.UniqueIdentifier, customer_id)
+    .input('quotation_number', sql.NVarChar, quotation_number)
+    .input('date', sql.Date, date || new Date())
+    .input('valid_until', sql.Date, valid_until || null)
+    .input('status', sql.NVarChar, status || 'draft')
+    .input('notes', sql.NVarChar, notes || null)
+    .input('total', sql.Decimal(10, 2), total || 0)
+    .query(`INSERT INTO quotations 
+            (id, customer_id, quotation_number, date, valid_until, status, notes, total) 
+            VALUES (@id, @customer_id, @quotation_number, @date, @valid_until, @status, @notes, @total)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.get('/quotations/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('SELECT * FROM quotations WHERE id = @id');
+  
+  if (result.recordset.length === 0) {
+    return res.status(404).json({ success: false, error: 'Quotation not found' });
+  }
+  
+  res.json({ success: true, data: result.recordset[0] });
+}));
+
+router.put('/quotations/:id', validate(quotationSchema), asyncHandler(async (req, res) => {
+  const { customer_id, quotation_number, date, valid_until, status, notes, total } = req.body;
+  const pool = getPool();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .input('customer_id', sql.UniqueIdentifier, customer_id)
+    .input('quotation_number', sql.NVarChar, quotation_number)
+    .input('date', sql.Date, date)
+    .input('valid_until', sql.Date, valid_until || null)
+    .input('status', sql.NVarChar, status)
+    .input('notes', sql.NVarChar, notes || null)
+    .input('total', sql.Decimal(10, 2), total)
+    .query(`UPDATE quotations 
+            SET customer_id = @customer_id, quotation_number = @quotation_number, 
+                date = @date, valid_until = @valid_until, status = @status, 
+                notes = @notes, total = @total, updated_at = GETUTCDATE() 
+            WHERE id = @id`);
+
+  res.json({ success: true });
+}));
+
+router.delete('/quotations/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM quotations WHERE id = @id');
+
+  res.json({ success: true });
+}));
+
+// Quotation Items
+router.get('/quotation-items/quotation/:quotationId', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('quotation_id', sql.UniqueIdentifier, req.params.quotationId)
+    .query('SELECT * FROM quotation_items WHERE quotation_id = @quotation_id');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/quotation-items', validate(quotationItemSchema), asyncHandler(async (req, res) => {
+  const { quotation_id, service_id, description, quantity, unit_price, total } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('quotation_id', sql.UniqueIdentifier, quotation_id)
+    .input('service_id', sql.UniqueIdentifier, service_id || null)
+    .input('description', sql.NVarChar, description)
+    .input('quantity', sql.Decimal(10, 2), quantity)
+    .input('unit_price', sql.Decimal(10, 2), unit_price)
+    .input('total', sql.Decimal(10, 2), total)
+    .query(`INSERT INTO quotation_items 
+            (id, quotation_id, service_id, description, quantity, unit_price, total) 
+            VALUES (@id, @quotation_id, @service_id, @description, @quantity, @unit_price, @total)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.delete('/quotation-items/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM quotation_items WHERE id = @id');
+
+  res.json({ success: true });
+}));
+
+// Invoices
+router.get('/invoices', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .query('SELECT * FROM invoices ORDER BY created_at DESC');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/invoices', validate(invoiceSchema), asyncHandler(async (req, res) => {
+  const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('customer_id', sql.UniqueIdentifier, customer_id)
+    .input('quotation_id', sql.UniqueIdentifier, quotation_id || null)
+    .input('invoice_number', sql.NVarChar, invoice_number)
+    .input('date', sql.Date, date || new Date())
+    .input('due_date', sql.Date, due_date || null)
+    .input('status', sql.NVarChar, status || 'draft')
+    .input('notes', sql.NVarChar, notes || null)
+    .input('total', sql.Decimal(10, 2), total || 0)
+    .query(`INSERT INTO invoices 
+            (id, customer_id, quotation_id, invoice_number, date, due_date, status, notes, total) 
+            VALUES (@id, @customer_id, @quotation_id, @invoice_number, @date, @due_date, @status, @notes, @total)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.get('/invoices/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('SELECT * FROM invoices WHERE id = @id');
+  
+  if (result.recordset.length === 0) {
+    return res.status(404).json({ success: false, error: 'Invoice not found' });
+  }
+  
+  res.json({ success: true, data: result.recordset[0] });
+}));
+
+router.put('/invoices/:id', validate(invoiceSchema), asyncHandler(async (req, res) => {
+  const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total } = req.body;
+  const pool = getPool();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .input('customer_id', sql.UniqueIdentifier, customer_id)
+    .input('quotation_id', sql.UniqueIdentifier, quotation_id || null)
+    .input('invoice_number', sql.NVarChar, invoice_number)
+    .input('date', sql.Date, date)
+    .input('due_date', sql.Date, due_date || null)
+    .input('status', sql.NVarChar, status)
+    .input('notes', sql.NVarChar, notes || null)
+    .input('total', sql.Decimal(10, 2), total)
+    .query(`UPDATE invoices 
+            SET customer_id = @customer_id, quotation_id = @quotation_id, 
+                invoice_number = @invoice_number, date = @date, due_date = @due_date, 
+                status = @status, notes = @notes, total = @total, updated_at = GETUTCDATE() 
+            WHERE id = @id`);
+
+  res.json({ success: true });
+}));
+
+router.delete('/invoices/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM invoices WHERE id = @id');
+
+  res.json({ success: true });
+}));
+
+// Invoice Items
+router.get('/invoice-items/invoice/:invoiceId', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.request()
+    .input('invoice_id', sql.UniqueIdentifier, req.params.invoiceId)
+    .query('SELECT * FROM invoice_items WHERE invoice_id = @invoice_id');
+  res.json({ success: true, data: result.recordset });
+}));
+
+router.post('/invoice-items', validate(invoiceItemSchema), asyncHandler(async (req, res) => {
+  const { invoice_id, service_id, description, quantity, unit_price, total } = req.body;
+  const pool = getPool();
+  const id = crypto.randomUUID();
+
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, id)
+    .input('invoice_id', sql.UniqueIdentifier, invoice_id)
+    .input('service_id', sql.UniqueIdentifier, service_id || null)
+    .input('description', sql.NVarChar, description)
+    .input('quantity', sql.Decimal(10, 2), quantity)
+    .input('unit_price', sql.Decimal(10, 2), unit_price)
+    .input('total', sql.Decimal(10, 2), total)
+    .query(`INSERT INTO invoice_items 
+            (id, invoice_id, service_id, description, quantity, unit_price, total) 
+            VALUES (@id, @invoice_id, @service_id, @description, @quantity, @unit_price, @total)`);
+
+  res.status(201).json({ success: true, data: { id } });
+}));
+
+router.delete('/invoice-items/:id', asyncHandler(async (req, res) => {
+  const pool = getPool();
+  await pool.request()
+    .input('id', sql.UniqueIdentifier, req.params.id)
+    .query('DELETE FROM invoice_items WHERE id = @id');
+
+  res.json({ success: true });
+}));
+
+export default router;
+
+// ============================================
+// 12. src/server.ts (Main Application)
+// ============================================
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
+import { config } from './config/index.js';
+import { connectDB, closeDB } from './db/index.js';
+import logger from './utils/logger.js';
+import routes from './routes/index.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+
+const app = express();
+
+// Security middleware
+app.use(helmet());
+app.use(cors());
+app.use(compression());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
+  message: 'Too many requests from this IP, please try again later.',
+});
+app.use('/api/', limiter);
+
+// Body parsing
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.path}`, {
+    ip: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+  next();
+});
+
+// API routes
+app.use('/api', routes);
+
+// Error handlers
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+// Graceful shutdown
+const gracefulShutdown = async () => {
+  logger.info('Received shutdown signal, closing server gracefully...');
+  try {
+    await closeDB();
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during graceful shutdown:', error);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Start server
+const startServer = async () => {
+  try {
+    await connectDB();
+    
+    app.listen(config.port, () => {
+      logger.info(`Server running on port ${config.port} in ${config.env} mode`);
+    });
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();

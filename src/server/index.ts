@@ -1,10 +1,20 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+dotenv.config();
 import { initializeDatabase, closeDatabase } from './db.js';
 import routes from './routes.js';
 
-dotenv.config();
+// // dotenv.config();
+
+// // --- ADD THESE LINES TO LOG YOUR ENVIRONMENT VARIABLES ---
+// console.log('--- ENV VARIABLE CHECK ---');
+// console.log('MSSQL_SERVER:', process.env.MSSQL_SERVER);
+// console.log('MSSQL_USER:', process.env.MSSQL_USER);
+// console.log('MSSQL_DATABASE:', process.env.MSSQL_DATABASE);
+// console.log('App Port (PORT):', process.env.PORT);
+// console.log('--- END ENV CHECK ---');
+// //
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
