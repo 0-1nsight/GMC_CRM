@@ -58,14 +58,7 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     loadCustomers();
     loadServices();
     if (invoice) {
-      setFormData({
-        customer_id: invoice.customer_id,
-        invoice_number: invoice.invoice_number,
-        date: invoice.date,
-        due_date: invoice.due_date || '',
-        status: invoice.status,
-        notes: invoice.notes || '',
-      });
+      loadInvoiceData()
     } else {
       generateInvoiceNumber();
     }
@@ -87,6 +80,34 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     } catch (error) {
       console.error('Error loading services:', error);
     }
+  }
+
+  async function loadInvoiceData() {
+    if (!invoice) return;
+      setFormData({
+        customer_id: invoice.customer_id,
+        invoice_number: invoice.invoice_number,
+        date: invoice.date,
+        due_date: invoice.due_date || '',
+        status: invoice.status,
+        notes: invoice.notes || '',
+      });
+
+      try {
+        const data = await api.invoices.getItems(invoice.id);
+        if (data && data.lenght > 0) {
+          setItems(data.map((item: any) => ({
+            id: item.id,
+            service_id: item.service_id,
+            description: item.description,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total: item.total,
+          })));
+        }
+      } catch (error) {
+        console.error('Error loading invoice data:', error);
+      }
   }
 
   async function generateInvoiceNumber() {
