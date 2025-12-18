@@ -95,14 +95,14 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
 
       try {
         const data = await api.invoices.getItems(invoice.id);
-        if (data && data.lenght > 0) {
+        if (data && data.length > 0) {
           setItems(data.map((item: any) => ({
             id: item.id,
             service_id: item.service_id,
             description: item.description,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total: item.total,
+            quantity: Number(item.quantity) || 0,
+            unit_price: Number(item.unit_price) || 0,
+            total: Number(item.total) || (Number(item.quantity) * Number(item.unit_price)) || 0,
           })));
         }
       } catch (error) {

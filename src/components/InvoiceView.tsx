@@ -1,5 +1,7 @@
 import { X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { api } from '../lib/api';
 
 interface InvoiceViewProps {
@@ -13,6 +15,7 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
   const [invoice, setInvoice] = useState<any | null>(null);
   const [items, setItems] = useState<any[]>([]);
   const [customerName, setCustomerName] = useState<string | null>(null);
+  const printRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -75,16 +78,36 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
     );
   }
 
+  async function exportPdf() {
+    if (!printRef.current) return;
+    try {
+      const canvas = await html2canvas(printRef.current, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const imgProps = (pdf as any).getImageProperties(imgData);
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const name = invoice?.invoice_number ? `invoice-${invoice.invoice_number}.pdf` : `invoice-${invoiceId}.pdf`;
+      pdf.save(name);
+    } catch (err) {
+      console.error('Export PDF failed', err);
+    }
+  }
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-800">Invoice #{invoice.invoice_number}</h1>
-        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-          <X className="w-6 h-6 text-gray-600" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportPdf} className="px-3 py-2 bg-gray-100 rounded-md text-sm hover:bg-gray-200">Export PDF</button>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <X className="w-6 h-6 text-gray-600" />
+          </button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+      <div ref={printRef} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <div className="mb-4">
           <div className="text-sm text-gray-600">Customer: <span className="font-medium text-gray-900">{customerName}</span></div>
           <div className="text-sm text-gray-600">Date: {new Date(invoice.date).toLocaleDateString()}</div>

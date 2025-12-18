@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LayoutDashboard, Users, Briefcase, FileText, Receipt } from 'lucide-react';
+import { LayoutDashboard, Users, Briefcase, FileText, Receipt, Menu } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { Customers } from './components/Customers';
 import { Services } from './components/Services';
@@ -10,6 +10,21 @@ type View = 'dashboard' | 'customers' | 'services' | 'quotations' | 'invoices';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sidebarCollapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  function toggleSidebar() {
+    setCollapsed((c) => {
+      const next = !c;
+      try { localStorage.setItem('sidebarCollapsed', String(next)); } catch {}
+      return next;
+    });
+  }
 
   const menuItems = [
     { id: 'dashboard' as View, label: 'Dashboard', icon: LayoutDashboard },
@@ -42,6 +57,9 @@ function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-3">
+              <button onClick={toggleSidebar} className="p-2 rounded-md hover:bg-gray-100" aria-label="Toggle sidebar">
+                <Menu className="w-6 h-6 text-gray-700" />
+              </button>
               <div className="bg-blue-600 p-2 rounded-lg">
                 <Receipt className="w-6 h-6 text-white" />
               </div>
@@ -52,7 +70,7 @@ function App() {
       </nav>
 
       <div className="flex">
-        <aside className="w-64 bg-white shadow-sm min-h-[calc(100vh-4rem)] border-r border-gray-200">
+        <aside className={`${collapsed ? 'w-20' : 'w-64'} bg-white shadow-sm min-h-[calc(100vh-4rem)] border-r border-gray-200 transition-width`}>
           <nav className="p-4 space-y-2">
             {menuItems.map((item) => {
               const Icon = item.icon;
@@ -68,7 +86,7 @@ function App() {
                   }`}
                 >
                   <Icon className="w-5 h-5" />
-                  <span className="font-medium">{item.label}</span>
+                  <span className={`font-medium ${collapsed ? 'hidden' : ''}`}>{item.label}</span>
                 </button>
               );
             })}
