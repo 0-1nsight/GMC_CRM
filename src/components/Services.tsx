@@ -155,7 +155,7 @@ export function Services() {
                     onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
-                    <option value="unit">Unit</option>
+                    <option value="Twice Weekly">Twice Weekly</option>
                     <option value="hour">Hour</option>
                     <option value="day">Day</option>
                     <option value="month">Month</option>

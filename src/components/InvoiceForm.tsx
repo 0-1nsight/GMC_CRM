@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { X, Plus, Trash2, Edit } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Customer {
@@ -10,7 +10,9 @@ interface Customer {
 interface Service {
   id: string;
   name: string;
+  description: string;
   unit_price: number;
+  unit: string;
 }
 
 interface Invoice {
@@ -22,6 +24,7 @@ interface Invoice {
   status: string;
   notes: string | null;
   total: number;
+  credit?: number;
 }
 
 interface InvoiceFormProps {
@@ -34,7 +37,8 @@ interface LineItem {
   id?: string;
   service_id: string | null;
   description: string;
-  quantity: number;
+  quantity: number | string;
+  quantityMode?: 'unit' | 'number';
   unit_price: number;
   total: number;
 }
@@ -48,10 +52,11 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     date: new Date().toISOString().split('T')[0],
     due_date: '',
     status: 'draft',
+    credit: 0,
     notes: '',
   });
   const [items, setItems] = useState<LineItem[]>([
-    { service_id: null, description: '', quantity: 1, unit_price: 0, total: 0 },
+    { service_id: null, description: '', quantity: 1, quantityMode: 'number', unit_price: 0, total: 0 },
   ]);
 
   useEffect(() => {
@@ -90,6 +95,7 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
         date: invoice.date,
         due_date: invoice.due_date || '',
         status: invoice.status,
+        credit: (invoice as any).credit || 0,
         notes: invoice.notes || '',
       });
 
@@ -113,7 +119,7 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
   async function generateInvoiceNumber() {
     try {
       const data = await api.invoices.list();
-      let newNumber = 'INV-1001';
+      let newNumber = 'INV-202601';
       if (data && data.length > 0) {
         const invoices = data as any[];
         const lastNumber = parseInt(invoices[0].invoice_number.split('-')[1]);
@@ -132,9 +138,13 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
       newItems[index] = {
         ...newItems[index],
         service_id: serviceId,
-        description: service.name,
+        description: service.description,
         unit_price: Number(service.unit_price),
-        total: Number(service.unit_price) * newItems[index].quantity,
+        // default to unit mode and show the service unit in quantity column
+        quantity: service.unit || '',
+        quantityMode: 'unit',
+        // when in unit mode, total represents one unit
+        total: Number(service.unit_price) || 0,
       };
       setItems(newItems);
     }
@@ -144,10 +154,36 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
 
+    // Recompute total depending on whether quantity is numeric or a unit string
+    const mode = newItems[index].quantityMode || 'number';
     if (field === 'quantity' || field === 'unit_price') {
-      newItems[index].total = Number(newItems[index].quantity) * Number(newItems[index].unit_price);
+      if (mode === 'unit') {
+        // unit mode: treat as 1 unit
+        newItems[index].total = Number(newItems[index].unit_price) || 0;
+      } else {
+        newItems[index].total = Number(newItems[index].quantity) * Number(newItems[index].unit_price);
+      }
     }
 
+    setItems(newItems);
+  }
+
+  function toggleQuantityMode(index: number) {
+    const newItems = [...items];
+    const item = newItems[index];
+    if (!item) return;
+    if (item.quantityMode === 'unit') {
+      // switch to numeric mode
+      item.quantityMode = 'number';
+      item.quantity = 1;
+      item.total = Number(item.unit_price) * Number(item.quantity);
+    } else {
+      // switch to unit mode, try to set unit from services list
+      const svc = services.find(s => s.id === item.service_id);
+      item.quantityMode = 'unit';
+      item.quantity = svc?.unit || '';
+      item.total = Number(item.unit_price) || 0;
+    }
     setItems(newItems);
   }
 
@@ -160,7 +196,9 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
   }
 
   function calculateTotal() {
-    return items.reduce((sum, item) => sum + Number(item.total), 0);
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    const creditValue = Number((formData as any).credit || 0) || 0;
+    return subtotal - creditValue;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -171,17 +209,28 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
       if (invoice) {
         await api.invoices.update(invoice.id, { ...formData, total });
 
-        for (const item of items.filter(i => i.id)) {
-          await api.invoiceItems.delete(item.id!);
+        // Delete existing DB items for this invoice, then re-insert current form items
+        try {
+          const existing = await api.invoices.getItems(invoice.id);
+          if (Array.isArray(existing)) {
+            for (const dbItem of existing) {
+              if (dbItem && dbItem.id) {
+                await api.invoiceItems.delete(dbItem.id);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to delete existing invoice items:', err);
         }
 
         const itemsToInsert = items.map(item => ({
           invoice_id: invoice.id,
           service_id: item.service_id,
           description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.total,
+          // always send a numeric quantity (unit-mode -> 1)
+          quantity: Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0),
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || ((Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0)) * Number(item.unit_price) || 0),
         }));
 
         for (const item of itemsToInsert) {
@@ -194,9 +243,9 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
           invoice_id: (newInvoice as any).id,
           service_id: item.service_id,
           description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.total,
+          quantity: Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0),
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || ((Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0)) * Number(item.unit_price) || 0),
         }));
 
         for (const item of itemsToInsert) {
@@ -284,6 +333,18 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
               </select>
             </div>
             <div>
+              {/* <label className="block text-sm font-medium text-gray-700 mb-2">Notes</label> */}
+              <label className="block text-sm font-medium text-gray-700 mb-2">Credit / Discount</label>
+              <input
+                type="number"
+                step="1.00"
+                min="0"
+                value={(formData as any).credit}
+                onChange={(e) => setFormData({ ...formData, credit: parseFloat(e.target.value) || 0 })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            <div className="col-span-1 md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">Notes</label>
               <input
                 type="text"
@@ -309,22 +370,65 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
           </div>
           <div className="space-y-4">
             {items.map((item, index) => (
-              <div key={index} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
-                <div className="col-span-12 md:col-span-3">
+              <div key={index} className="grid grid-cols-12 gap-2 items-center p-4 bg-gray-50 rounded-lg">
+                
+                {/* 1. Edit Button - span 1 */}
+                {/* <div className="col-span-1 flex items-center justify-start">
+                  <button
+                    type="button"
+                    onClick={() => toggleQuantityMode(index)}
+                    title={item.quantityMode === 'unit' ? 'Switch to numeric quantity' : 'Switch to unit quantity'}
+                    className="p-1 bg-white border border-gray-200 rounded-md text-gray-700 hover:bg-gray-100"
+                  >
+                    <Edit className="w-3 h-3" />
+                  </button>
+                </div> */}
+
+                {/* 2. Service - span 2 (Reduced from 3) */}
+                {/* <div className="col-span-12 md:col-span-2">
                   <label className="block text-xs font-medium text-gray-700 mb-1">Service</label>
                   <select
                     value={item.service_id || ''}
                     onChange={(e) => handleServiceChange(index, e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Custom item</option>
                     {services.map((service) => (
-                      <option key={service.id} value={service.id}>
-                        {service.name}
-                      </option>
+                      <option key={service.id} value={service.id}>{service.name}</option>
                     ))}
                   </select>
-                </div>
+                </div> */}
+                {/* 1. Service Column */}
+      <div className="col-span-12 md:col-span-3">
+        <label className="block text-xs font-medium text-gray-700 mb-1 ml-10">Service</label>
+        <div className="flex items-center gap-2">
+          {/* Edit Button next to Select */}
+          <button
+            type="button"
+            onClick={() => toggleQuantityMode(index)}
+            title={item.quantityMode === 'unit' ? 'Switch to numeric quantity' : 'Switch to unit quantity'}
+            className="p-2 bg-white border border-gray-200 rounded-md text-gray-700 hover:bg-gray-100 flex-shrink-0"
+          >
+            <Edit className="w-4 h-4" />
+          </button>
+
+          <select
+            value={item.service_id || ''}
+            onChange={(e) => handleServiceChange(index, e.target.value)}
+            className="flex-1 min-w-0 px-2 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">Custom item</option>
+            {services.map((service) => (
+              <option key={service.id} value={service.id}>{service.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+
+
+
+                {/* 3. Description - span 3 (Reduced from 4) */}
                 <div className="col-span-12 md:col-span-4">
                   <label className="block text-xs font-medium text-gray-700 mb-1">Description</label>
                   <input
@@ -332,49 +436,61 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
                     required
                     value={item.description}
                     onChange={(e) => updateItem(index, 'description', e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
                   />
                 </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
+
+                {/* 4. Quantity - span 2 */}
+                <div className="col-span-6 md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Qty</label>
+                  {item.quantityMode === 'unit' ? (
+                    <div className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-gray-50 text-gray-700">
+                      {String(item.quantity || '')}
+                    </div>
+                  ) : (
+                    <input
+                      type="number"
+                      required
+                      value={Number(item.quantity)}
+                      onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                    />
+                  )}
+                </div>
+
+                {/* 5. Unit Price - span 2 */}
+                <div className="col-span-6 md:col-span-1">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Price</label>
                   <input
                     type="number"
                     required
                     step="0.01"
-                    min="0"
-                    value={item.quantity}
-                    onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Unit Price</label>
-                  <input
-                    type="number"
-                    required
-                    step="0.01"
-                    min="0"
                     value={item.unit_price}
                     onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
                   />
                 </div>
-                <div className="col-span-3 md:col-span-1 flex items-end">
-                  <div className="text-sm font-semibold text-gray-900 py-2">
-                    ${item.total.toFixed(2)}
+
+                {/* 6. Total & Trash - span 2 (Combined to force same line) */}
+                <div className="col-span-12 md:col-span-2 flex items-end justify-between md:justify-end gap-3 pb-1">
+                  <div className="text-right">
+                    <label className="block text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">Total</label>
+                    <div className="text-sm font-bold text-gray-900">
+                      ${item.total.toFixed(2)}
+                    </div>
                   </div>
-                </div>
-                <div className="col-span-1 flex items-end justify-end">
+                  
                   {items.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeItem(index)}
-                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   )}
                 </div>
+
               </div>
             ))}
           </div>

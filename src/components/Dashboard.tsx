@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, FileText, Receipt, Briefcase } from 'lucide-react';
+import { Users, FileText, Receipt, Briefcase, Settings} from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Stats {
@@ -46,7 +46,7 @@ export function Dashboard() {
 
   const statCards = [
     { label: 'Customers', value: stats.customers, icon: Users, color: 'bg-blue-500' },
-    { label: 'Services', value: stats.services, icon: Briefcase, color: 'bg-green-500' },
+    { label: 'Services', value: stats.services, icon: Settings, color: 'bg-green-500' },
     { label: 'Quotations', value: stats.quotations, icon: FileText, color: 'bg-yellow-500' },
     { label: 'Invoices', value: stats.invoices, icon: Receipt, color: 'bg-red-500' },
   ];
