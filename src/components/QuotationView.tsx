@@ -20,6 +20,13 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
 
   useEffect(() => {
     let mounted = true;
+
+    // Helper to sanitize date strings from ISO format (2025-12-18T...) to yyyy-MM-dd
+    const formatDateForState = (dateString: string | null) => {
+      if (!dateString) return '';
+      return dateString.split('T')[0];
+    };
+
     async function load() {
       setLoading(true);
       setError(null);
@@ -28,12 +35,23 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
           api.quotations.list(),
           api.customers.list(),
         ]);
-        const q = (quotations as any[]).find((x) => x.id === quotationId) || null;
+
+        const rawQuotation = (quotations as any[]).find((x) => x.id === quotationId) || null;
+        
+        // Transform the quotation data to ensure dates are compliant
+        const formattedQuotation = rawQuotation ? {
+          ...rawQuotation,
+          date: formatDateForState(rawQuotation.date),
+          valid_until: formatDateForState(rawQuotation.valid_until)
+        } : null;
+
         const custMap = Object.fromEntries((customers as any[]).map((c: any) => [c.id, c]));
-        const name = q ? (custMap[q.customer_id]?.name || null) : null;
+        const name = formattedQuotation ? (custMap[formattedQuotation.customer_id]?.name || null) : null;
         const qItems = await api.quotations.getItems(quotationId);
+
         if (!mounted) return;
-        setQuotation(q);
+
+        setQuotation(formattedQuotation);
         setCustomerName(name);
         setItems(qItems as any[]);
       } catch (err) {
@@ -52,7 +70,6 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
     setIsExporting(true);
 
     try {
-      // 1. Capture the main content and footer separately
       const element = printRef.current;
       const footerElement = document.getElementById('pdf-footer');
       
@@ -61,7 +78,6 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        // Exclude footer from the main capture to prevent double-rendering
         ignoreElements: (el) => el.id === 'pdf-footer'
       });
 
@@ -76,11 +92,9 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
-      // Calculate content dimensions
       const imgProps = (pdf as any).getImageProperties(imgData);
       const contentHeightInPdf = (imgProps.height * pdfWidth) / imgProps.width;
       
-      // Footer height logic
       const footerHeight = footerCanvas ? (footerCanvas.height * pdfWidth) / footerCanvas.width : 0;
       const margin = 10;
       const pageContentHeight = pdfHeight - footerHeight - (margin * 2);
@@ -89,12 +103,9 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
       let position = 0;
 
       while (heightLeft > 0) {
-        // Add content slice
         pdf.addImage(imgData, 'PNG', 0, position + margin, pdfWidth, contentHeightInPdf);
         
-        // Add White Mask and Footer to every page
         if (footerCanvas) {
-          // Masking rectangle to prevent content overlapping footer
           pdf.setFillColor(255, 255, 255);
           pdf.rect(0, pdfHeight - footerHeight - margin, pdfWidth, footerHeight + margin, 'F');
           
@@ -125,7 +136,23 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
     }
   }
 
-  if (loading) { /* ... same as your current loading state ... */ }
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12">
+        <Loader2 className="w-8 h-8 animate-spin text-[#003366] mb-4" />
+        <p className="text-gray-500">Loading quotation details...</p>
+      </div>
+    );
+  }
+
+  if (error || !quotation) {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-red-500 font-medium">{error || 'Quotation not found'}</p>
+        <button onClick={onClose} className="mt-4 text-blue-600 hover:underline">Go Back</button>
+      </div>
+    );
+  }
 
   const quotationDate = new Date(quotation.date);
   const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);

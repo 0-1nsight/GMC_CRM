@@ -1,9 +1,14 @@
+// ─── InvoiceView.tsx ────────────────────────────────────────────────────────
+// Install dependency first:
+//   npm install @react-pdf/renderer
+//   npm install -D @types/react-pdf
+// ────────────────────────────────────────────────────────────────────────────
+
 import { X, Download, Loader2 } from 'lucide-react';
-import { useEffect, useState, useRef } from 'react';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { useEffect, useState } from 'react';
+import { pdf } from '@react-pdf/renderer';
+import { InvoicePDF } from './InvoicePDF'; // ← separate file below
 import { api } from '../lib/api';
-import { Customers } from './Customers';
 
 interface InvoiceViewProps {
   invoiceId: string;
@@ -18,7 +23,6 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
   const [items, setItems] = useState<any[]>([]);
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [customerAddress, setCustomerAddress] = useState<string | null>(null);
-  const printRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -32,13 +36,13 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
         ]);
         const inv = (invoices as any[]).find((x) => x.id === invoiceId) || null;
         const custMap = Object.fromEntries((customers as any[]).map((c: any) => [c.id, c]));
-        const name = inv ? (custMap[inv.customer_id]?.name || null) : null;
-        const customerAddress = inv ? (custMap[inv.customer_id]?.address || null) : null;
+        const resolvedName = inv ? (custMap[inv.customer_id]?.name || null) : null;
+        const resolvedAddress = inv ? (custMap[inv.customer_id]?.address || null) : null;
         const invItems = await api.invoices.getItems(invoiceId);
         if (!mounted) return;
         setInvoice(inv);
-        setCustomerName(name);
-        setCustomerAddress(customerAddress);
+        setCustomerName(resolvedName);
+        setCustomerAddress(resolvedAddress);
         setItems(invItems as any[]);
       } catch (err) {
         console.error('Failed loading invoice:', err);
@@ -51,31 +55,46 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
     return () => { mounted = false; };
   }, [invoiceId]);
 
+  // ── PDF Export ──────────────────────────────────────────────────────────────
   async function exportPdf() {
-    if (!printRef.current) return;
+    if (!invoice) return;
     setIsExporting(true);
     try {
-      const canvas = await html2canvas(printRef.current, { 
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff'
-      });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const imgProps = (pdf as any).getImageProperties(imgData);
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      const name = invoice?.invoice_number ? `GMC-Invoice-${invoice.invoice_number}.pdf` : `invoice-${invoiceId}.pdf`;
-      pdf.save(name);
+      const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+      const gct = invoice.gct != null ? Number(invoice.gct) : subtotal * 0.165;
+      const credit = invoice.credit != null ? Number(invoice.credit) : 0;
+      const finalTotal = subtotal + gct - credit;
+
+      const blob = await pdf(
+        <InvoicePDF
+          invoice={invoice}
+          items={items}
+          customerName={customerName}
+          customerAddress={customerAddress}
+          subtotal={subtotal}
+          gct={gct}
+          credit={credit}
+          finalTotal={finalTotal}
+        />
+      ).toBlob();
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = invoice.invoice_number
+        ? `GMC-Invoice-${invoice.invoice_number}.pdf`
+        : `invoice-${invoiceId}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('Export PDF failed', err);
+      console.error('Export PDF failed:', err);
+      alert('Failed to export PDF. Please try again.');
     } finally {
       setIsExporting(false);
     }
   }
 
+  // ── Loading / Error states ──────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto">
@@ -113,22 +132,32 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
 
   const invoiceDate = new Date(invoice.date);
   const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const gct = invoice.gct !== undefined ? Number(invoice.gct) : (subtotal * 0.165);
-  const credit = invoice.credit !== undefined ? Number(invoice.credit) : 200;
+  const gct = invoice.gct != null ? Number(invoice.gct) : subtotal * 0.165;
+  const credit = invoice.credit != null ? Number(invoice.credit) : 0;
   const finalTotal = subtotal + gct - credit;
+
+  const statusColor =
+    invoice.status === 'paid'
+      ? 'bg-green-100 text-green-700 border border-green-300'
+      : invoice.status === 'draft'
+      ? 'bg-yellow-100 text-yellow-700 border border-yellow-300'
+      : 'bg-blue-100 text-blue-700 border border-blue-300';
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-800">Invoice #{invoice.invoice_number}</h1>
+      {/* Page-level toolbar */}
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">
+          Invoice <span className="text-[#003366]">#{invoice.invoice_number}</span>
+        </h1>
         <div className="flex items-center gap-2">
-          <button 
-            onClick={exportPdf} 
+          <button
+            onClick={exportPdf}
             disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 bg-[#003366] text-white rounded-md text-sm hover:bg-blue-900 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-[#003366] text-white rounded-md text-sm font-medium hover:bg-blue-900 transition-colors disabled:opacity-50 shadow-sm"
           >
             {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            Export PDF
+            {isExporting ? 'Exporting…' : 'Export PDF'}
           </button>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
             <X className="w-6 h-6 text-gray-600" />
@@ -136,176 +165,222 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
         </div>
       </div>
 
-      <div ref={printRef} className="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
-        {/* Centered Full Width Header */}
-        <div className="mb-10 pb-6 border-b-2 border-[#003366] text-center">
-          <h2 className="text-3xl font-black text-[#003366] leading-tight">GMC Haulage Co. LTD.</h2>
-          <p className="text-xs italic text-gray-500 uppercase tracking-wider mt-1">
-            "You Provide The Work: Let Us Do The Haul"
-          </p>
+      {/* ── PRINTABLE INVOICE BODY (UI only — PDF uses InvoicePDF.tsx) ── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+
+        {/* ── HEADER ── */}
+        <div className="bg-[#003366] px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-black text-white tracking-tight leading-none">
+                GMC Haulage Co. Ltd.
+              </h2>
+              <p className="text-blue-200 text-xs italic mt-1 tracking-wide">
+                "You Provide The Work — Let Us Do The Haul"
+              </p>
+            </div>
+            <div className="flex items-center justify-center bg-white rounded-lg px-3 py-2 shadow-inner">
+              <img
+                src="/src/assets/logo.avif"
+                alt="GMC Haulage Logo"
+                className="h-10 w-auto object-contain"
+                style={{ imageRendering: 'crisp-edges' }}
+              />
+            </div>
+          </div>
+          <div className="mt-4 border-t border-blue-400 opacity-40" />
         </div>
 
-        {/* Invoice Meta Grid */}
-        <div className="grid grid-cols-2 gap-8 mb-8">
-          {/* Left Column: Details & Billed To */}
-          <div className="space-y-6">
-             <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm max-w-md">
-              <span className="text-gray-600 font-medium">Invoice Number:</span>
-              <span className="font-bold text-gray-900">{invoice.invoice_number}</span>
-              
-              <span className="text-gray-600 font-medium">Date of Issue:</span>
-              <span className="font-bold text-gray-900">
-                {!isNaN(invoiceDate.getTime()) ? invoiceDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'N/A'}
-              </span>
-
-              <span className="text-gray-600 font-medium">Payment Terms:</span>
-              <span className="font-bold text-gray-900">{invoice.terms || "5"} Days Net</span>
-              
-              <span className="text-gray-600 font-medium">Status:</span>
-              <span className={`font-bold uppercase text-xs ${invoice.status === 'paid' ? 'text-green-600' : 'text-yellow-600'}`}>
-                {invoice.status || 'Pending'}
-              </span>
+        {/* ── META ── */}
+        <div className="px-6 pt-4 pb-3">
+          <div className="grid grid-cols-3 gap-6">
+            <div>
+              <p className="text-[10px] font-bold text-[#003366] uppercase tracking-widest mb-3 border-b border-blue-100 pb-1">
+                Invoice Details
+              </p>
+              <table className="text-sm w-full">
+                <tbody>
+                  {[
+                    ['Invoice No.', invoice.invoice_number],
+                    ['Issue Date', !isNaN(invoiceDate.getTime())
+                      ? invoiceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                      : 'N/A'],
+                    ['Due Date', invoice.due_date
+                      ? new Date(invoice.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                      : 'N/A'],
+                    ['Terms', `${invoice.terms || '30'} Days Net`],
+                  ].map(([label, value]) => (
+                    <tr key={label}>
+                      <td className="text-gray-500 pr-3 py-0.5 align-top whitespace-nowrap">{label}:</td>
+                      <td className="font-semibold text-gray-900 py-0.5">{value}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="text-gray-500 pr-3 py-0.5 align-middle">Status:</td>
+                    <td className="py-0.5">
+                      <span className={`inline-block text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${statusColor}`}>
+                        {invoice.status || 'Pending'}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-
-            <div className="bg-gray-50 p-4 rounded-lg border-l-4 border-[#003366] mt-6">
-              <h3 className="text-xs font-bold text-[#003366] uppercase mb-3 tracking-wider">Billed To:</h3>
-              <p className="text-lg font-bold text-gray-900 mb-1">{customerName}</p>
-              <div className="text-sm text-gray-600">
-                {/* Split address into multiple paragraph tags */}
-                {(customerAddress || 'Address Test').split(',').map((part, index) => (
-                  <p key={index} className="mt-2 capitalize">
-                    {part.trim().toLocaleLowerCase()}
-                  </p>
+            <div>
+              <p className="text-[10px] font-bold text-[#003366] uppercase tracking-widest mb-3 border-b border-blue-100 pb-1">
+                Billed To
+              </p>
+              <p className="text-sm font-bold text-gray-900 mb-1">{customerName || '—'}</p>
+              <div className="text-xs text-gray-600 leading-relaxed">
+                {(customerAddress || '').split(',').map((part, i) => (
+                  <p key={i}>{part.trim()}</p>
                 ))}
-
-                {/* Added mt-2 here to create the separation you wanted for the country */}
-                <p className="mt-2">{invoice.customer_country || 'Jamaica'}</p>
+                <p>{invoice.customer_country || 'Jamaica'}</p>
               </div>
             </div>
-          </div>
-
-          {/* Right Column: Logo & Service Info */}
-          <div className="flex flex-col items-end">
-            <img src="/src/assets/logo.avif" alt="GMC Logo" className="w-40 h-auto mb-6" />
-            
-            <div className="w-full bg-blue-50 p-4 rounded-lg border-l-4 border-blue-600 mt-6">
-              <h3 className="text-xs font-bold text-blue-900 uppercase mb-3 tracking-wider">Invoice For:</h3>
-              <div className="space-y-2 text-sm">
-                <div>
-                  <span className="text-gray-600 font-medium block">Service:</span>
-                  <span className="text-gray-900 font-semibold">{invoice.service_description || 'Waste Management & Specialized Haulage'}</span>
+            <div>
+              <p className="text-[10px] font-bold text-[#003366] uppercase tracking-widest mb-3 border-b border-blue-100 pb-1">
+                Service
+              </p>
+              <p className="text-sm font-semibold text-gray-900 mb-3">
+                {invoice.service_description || 'Waste Management & Specialized Haulage'}
+              </p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-gray-50 rounded p-2">
+                  <p className="text-gray-500 mb-0.5">Period</p>
+                  <p className="font-bold text-gray-900">
+                    {!isNaN(invoiceDate.getTime())
+                      ? invoiceDate.toLocaleString('default', { month: 'long', year: 'numeric' })
+                      : 'N/A'}
+                  </p>
                 </div>
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <div>
-                    <span className="text-gray-600 font-medium block text-xs">Period:</span>
-                    <span className="text-gray-900 font-bold">{!isNaN(invoiceDate.getTime()) ? invoiceDate.toLocaleString('default', { month: 'long', year: 'numeric' }) : 'N/A'}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600 font-medium block text-xs">Billing Date:</span>
-                    <span className="text-gray-900 font-bold">
-                      {!isNaN(invoiceDate.getTime()) ? invoiceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A'}
-                    </span>
-                  </div>
+                <div className="bg-gray-50 rounded p-2">
+                  <p className="text-gray-500 mb-0.5">Billing Date</p>
+                  <p className="font-bold text-gray-900">
+                    {!isNaN(invoiceDate.getTime())
+                      ? invoiceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                      : 'N/A'}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto mb-8">
-          <table className="w-full text-left border-collapse">
+        {/* ── LINE ITEMS TABLE ── */}
+        <div className="px-6 pb-1">
+          <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-[#003366] text-white">
-                <th className="px-4 py-3 text-xs uppercase font-bold">Description</th>
-                <th className="px-4 py-3 text-xs uppercase font-bold text-center w-20">Quantity</th>
-                <th className="px-4 py-3 text-xs uppercase font-bold text-right w-32">Unit Price</th>
-                <th className="px-4 py-3 text-xs uppercase font-bold text-right w-32">Total</th>
+                <th className="px-3 py-2 text-xs font-bold uppercase tracking-wide rounded-tl-md w-8 text-center">#</th>
+                <th className="px-3 py-2 text-xs font-bold uppercase tracking-wide">Description</th>
+                <th className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-center w-16">Qty</th>
+                <th className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-right w-28">Unit Price</th>
+                <th className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-right w-28 rounded-tr-md">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {items.map((it) => (
-                <tr key={it.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-700">{it.description}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700 text-center font-semibold">{it.quantity}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700 text-right">${Number(it.unit_price).toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-right">${Number(it.total).toFixed(2)}</td>
+            <tbody>
+              {items.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                  style={{ borderBottom: '1px solid #e5e7eb' }}
+                >
+                  <td className="px-3 py-2 text-center text-gray-400 text-xs font-mono">{idx + 1}</td>
+                  <td className="px-3 py-2 text-gray-700 text-xs">{it.description}</td>
+                  <td className="px-3 py-2 text-center font-semibold text-gray-800 text-xs">{it.quantity}</td>
+                  <td className="px-3 py-2 text-right text-gray-700 text-xs">${Number(it.unit_price).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                  <td className="px-3 py-2 text-right font-semibold text-gray-900 text-xs">${Number(it.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
 
-        {/* Totals & Signature Block */}
-        <div className="flex justify-between items-end mb-12">
-          {/* Managing Director Signature & Seal */}
-          <div className="relative">
-            <img 
-              src="/src/assets/seal.png" 
-              className="absolute -top-8 left-8 w-40 h-40 opacity-20 pointer-events-none" 
-              alt="Official Seal" 
-            />
-            
-            {/* <div className="w-64 border-b-2 border-gray-800 mb-2">
-              <img 
-                src="/src/assets/sig.png" 
-                className="h-16 mb-2" 
-                alt="Managing Director Signature" 
-            
-              />
-            </div> */}
-
-            <div className="w-64 border-b-2 border-gray-800 mb-2 flex items-end">
-              <img 
-                src="/src/assets/sig.png" 
-                className="h-16" 
-                alt="Managing Director Signature" 
-              />
-            </div>
-            
-            <p className="text-xs font-bold uppercase text-[#003366]">Managing Director</p>
-            <p className="text-[10px] text-gray-500 font-semibold mt-1">Authorized Signature</p>
-          </div>
-
-          {/* Totals Section */}
-          <div className="w-80 space-y-3">
-            <div className="flex justify-between items-center px-4 py-2">
-              <span className="text-sm text-gray-600 font-medium">Subtotal:</span>
-              <span className="text-sm font-semibold text-gray-900">${subtotal.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center px-4 py-2">
-              <span className="text-sm text-gray-600 font-medium">GCT (16.5%):</span>
-              <span className="text-sm font-semibold text-gray-900">${gct.toFixed(2)}</span>
-            </div>
-            <div className="border-t border-gray-300 my-2"></div>
-            <div className="flex justify-between items-center bg-[#003366] text-white px-6 py-4 rounded-lg shadow-sm">
-              <div className="flex flex-col">
-                <span className="text-sm font-bold uppercase">Total Due:</span>
-                <span className="text-[10px] opacity-80">Payable to GMC Haulage Co. LTD.</span>
+        {/* ── TOTALS + SIGNATURE ── */}
+        <div className="px-6 pt-3 pb-4">
+          <div className="flex justify-between items-end gap-8">
+            <div className="flex-shrink-0 w-64">
+              {/* Seal + signature layered container */}
+              <div className="relative h-24 w-full">
+                {/* Seal — centered behind signature */}
+                <img
+                  src="/src/assets/seal.png"
+                  className="absolute top-6 left-16 w-28 h-28 opacity-[0.15] pointer-events-none select-none"
+                  alt=""
+                />
+                {/* Signature — bottom anchored so it rests on the rule */}
+                <img
+                  src="/src/assets/sig.png"
+                  className="absolute bottom-[-1.8rem] left-0 h-16 w-auto object-contain"
+                  alt="Managing Director Signature"
+                />
               </div>
-              <span className="text-2xl font-bold">${finalTotal.toFixed(2)}</span>
+              {/* Rule — signature sits directly on this */}
+              <div className="border-b-2 border-gray-700 mb-2" />
+              <p className="text-xs font-bold uppercase text-[#003366]">Managing Director</p>
+              <p className="text-[10px] text-gray-400 font-medium mt-0.5">Authorized Signature</p>
             </div>
-            <div className="flex justify-between items-center px-4 py-2 bg-red-50 rounded-lg border border-red-200 mt-2">
-              <span className="text-sm text-red-700 font-medium">Credit Applied:</span>
-              <span className="text-sm font-semibold text-red-600">-${credit.toFixed(2)}</span>
+            <div className="w-72 flex-shrink-0">
+              <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+                <div className="px-4 py-2.5 flex justify-between text-sm border-b border-gray-200">
+                  <span className="text-gray-600">Subtotal</span>
+                  <span className="font-semibold text-gray-900">${subtotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="px-4 py-2.5 flex justify-between text-sm border-b border-gray-200">
+                  <span className="text-gray-600">GCT (16.5%)</span>
+                  <span className="font-semibold text-gray-900">${gct.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                </div>
+                {credit > 0 && (
+                  <div className="px-4 py-2.5 flex justify-between text-sm border-b border-gray-200 bg-red-50">
+                    <span className="text-red-700">Credit Applied</span>
+                    <span className="font-semibold text-red-600">-${credit.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                <div className="bg-[#003366] px-4 py-3 flex justify-between items-center">
+                  <div>
+                    <p className="text-white text-xs font-bold uppercase tracking-wide">Total Due</p>
+                    <p className="text-blue-200 text-[10px]">Payable to GMC Haulage Co. Ltd.</p>
+                  </div>
+                  <p className="text-white text-xl font-black">${finalTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="pt-8 border-t-2 border-gray-200">
-          <div className="grid grid-cols-2 gap-x-12 gap-y-6 text-right text-xs">
-            <div className="space-y-1 text-left">
-              <h4 className="text-[#003366] font-bold uppercase text-xs mb-2 border-b border-blue-100 pb-1">Corporate Tax</h4>
-              <p className="text-gray-600">Reg No: <span className="text-gray-900 font-bold">104880</span></p>
-              <p className="text-gray-600">TRN No: <span className="text-gray-900 font-bold">002933136</span></p>
-              <p className="text-gray-600">Email: <span className="text-blue-600 font-medium">info@gmchaulageltd.com</span></p>
+        {/* ── NOTES (conditional) ── */}
+        {invoice.notes && (
+          <div className="px-8 pb-4">
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <h4 className="text-xs font-bold uppercase text-amber-800 mb-1 tracking-wide">Notes</h4>
+              <p className="text-sm text-amber-900">{invoice.notes}</p>
             </div>
-            <div className="space-y-1">
-              <h4 className="text-[#003366] font-bold uppercase text-xs mb-2 border-b border-blue-100 pb-1">Bank Transfer</h4>
-              <p className="text-gray-600">Bank: <span className="text-gray-900 font-bold">First Global (May Pen)</span></p>
-              <p className="text-gray-600">Account: <span className="text-gray-900 font-bold">991001002662</span></p>
-              <p className="text-gray-600">Type: <span className="text-gray-900 font-bold">Business Savings</span></p>
+          </div>
+        )}
+
+        {/* ── FOOTER ── */}
+        <div className="px-6 py-4 border-t-2 border-gray-100 bg-gray-50">
+          <div className="grid grid-cols-2 gap-8">
+            <div>
+              <p className="text-[10px] font-bold text-[#003366] uppercase tracking-widest mb-2 border-b border-blue-100 pb-1">
+                Corporate Tax
+              </p>
+              <div className="text-xs text-gray-600 space-y-1">
+                <p>Reg No: <span className="font-bold text-gray-900">104880</span></p>
+                <p>TRN No: <span className="font-bold text-gray-900">002933136</span></p>
+                <p>Email: <a href="mailto:info@gmchaulageltd.com" className="text-blue-600 font-medium">info@gmchaulageltd.com</a></p>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-[#003366] uppercase tracking-widest mb-2 border-b border-blue-100 pb-1">
+                Bank Transfer
+              </p>
+              <div className="text-xs text-gray-600 space-y-1">
+                <p>Bank: <span className="font-bold text-gray-900">First Global (May Pen)</span></p>
+                <p>Account: <span className="font-bold text-gray-900">991001002662</span></p>
+                <p>Type: <span className="font-bold text-gray-900">Business Savings</span></p>
+              </div>
             </div>
           </div>
         </div>
