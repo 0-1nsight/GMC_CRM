@@ -37,6 +37,8 @@ interface Quotation {
   status: string;
   notes: string | null;
   total: number;
+  gct: number;
+  discount: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -61,6 +63,8 @@ interface Invoice {
   status: string;
   notes: string | null;
   total: number;
+  gct: number;
+  credit: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -250,7 +254,7 @@ router.get('/quotations', async (req: Request, res: Response) => {
 
 router.post('/quotations', async (req: Request, res: Response) => {
   try {
-    const { customer_id, quotation_number, date, valid_until, status, notes, total } = req.body as Partial<Quotation>;
+    const { customer_id, quotation_number, date, valid_until, status, notes, total, gct, discount } = req.body as Partial<Quotation>;
     const pool = getPool();
     const id = randomUUID();
 
@@ -263,9 +267,11 @@ router.post('/quotations', async (req: Request, res: Response) => {
       .input('status', sql.NVarChar, status || 'draft')
       .input('notes', sql.NVarChar, notes || null)
       .input('total', sql.Decimal(10, 2), total || 0)
+      .input('gct', sql.Decimal(10, 2), gct || 0)
+      .input('discount', sql.Decimal(10, 2), discount || 0)
       .query(`
-        INSERT INTO quotations (id, customer_id, quotation_number, date, valid_until, status, notes, total, created_at, updated_at) 
-        VALUES (@id, @customer_id, @quotation_number, @date, @valid_until, @status, @notes, @total, GETUTCDATE(), GETUTCDATE())
+        INSERT INTO quotations (id, customer_id, quotation_number, date, valid_until, status, notes, total, gct, discount, created_at, updated_at)
+        VALUES (@id, @customer_id, @quotation_number, @date, @valid_until, @status, @notes, @total, @gct, @discount, GETUTCDATE(), GETUTCDATE())
       `);
 
     res.json({ id });
@@ -276,7 +282,7 @@ router.post('/quotations', async (req: Request, res: Response) => {
 
 router.put('/quotations/:id', async (req: Request, res: Response) => {
   try {
-    const { customer_id, quotation_number, date, valid_until, status, notes, total } = req.body as Partial<Quotation>;
+    const { customer_id, quotation_number, date, valid_until, status, notes, total, gct, discount } = req.body as Partial<Quotation>;
     const pool = getPool();
 
     await pool.request()
@@ -288,9 +294,11 @@ router.put('/quotations/:id', async (req: Request, res: Response) => {
       .input('status', sql.NVarChar, status)
       .input('notes', sql.NVarChar, notes || null)
       .input('total', sql.Decimal(10, 2), total || 0)
+      .input('gct', sql.Decimal(10, 2), gct || 0)
+      .input('discount', sql.Decimal(10, 2), discount || 0)
       .query(`
-        UPDATE quotations 
-        SET customer_id = @customer_id, quotation_number = @quotation_number, date = @date, valid_until = @valid_until, status = @status, notes = @notes, total = @total, updated_at = GETUTCDATE() 
+        UPDATE quotations
+        SET customer_id = @customer_id, quotation_number = @quotation_number, date = @date, valid_until = @valid_until, status = @status, notes = @notes, total = @total, gct = @gct, discount = @discount, updated_at = GETUTCDATE()
         WHERE id = @id
       `);
 
@@ -380,7 +388,7 @@ router.get('/invoices', async (req: Request, res: Response) => {
 
 router.post('/invoices', async (req: Request, res: Response) => {
   try {
-    const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total } = req.body as Partial<Invoice>;
+    const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total, gct, credit } = req.body as Partial<Invoice>;
     const pool = getPool();
     const id = randomUUID();
 
@@ -394,9 +402,11 @@ router.post('/invoices', async (req: Request, res: Response) => {
       .input('status', sql.NVarChar, status || 'draft')
       .input('notes', sql.NVarChar, notes || null)
       .input('total', sql.Decimal(10, 2), total || 0)
+      .input('gct', sql.Decimal(10, 2), gct || 0)
+      .input('credit', sql.Decimal(10, 2), credit || 0)
       .query(`
-        INSERT INTO invoices (id, customer_id, quotation_id, invoice_number, date, due_date, status, notes, total, created_at, updated_at) 
-        VALUES (@id, @customer_id, @quotation_id, @invoice_number, @date, @due_date, @status, @notes, @total, GETUTCDATE(), GETUTCDATE())
+        INSERT INTO invoices (id, customer_id, quotation_id, invoice_number, date, due_date, status, notes, total, gct, credit, created_at, updated_at)
+        VALUES (@id, @customer_id, @quotation_id, @invoice_number, @date, @due_date, @status, @notes, @total, @gct, @credit, GETUTCDATE(), GETUTCDATE())
       `);
 
     res.json({ id });
@@ -407,7 +417,7 @@ router.post('/invoices', async (req: Request, res: Response) => {
 
 router.put('/invoices/:id', async (req: Request, res: Response) => {
   try {
-    const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total } = req.body as Partial<Invoice>;
+    const { customer_id, quotation_id, invoice_number, date, due_date, status, notes, total, gct, credit } = req.body as Partial<Invoice>;
     const pool = getPool();
 
     await pool.request()
@@ -420,9 +430,11 @@ router.put('/invoices/:id', async (req: Request, res: Response) => {
       .input('status', sql.NVarChar, status)
       .input('notes', sql.NVarChar, notes || null)
       .input('total', sql.Decimal(10, 2), total || 0)
+      .input('gct', sql.Decimal(10, 2), gct || 0)
+      .input('credit', sql.Decimal(10, 2), credit || 0)
       .query(`
-        UPDATE invoices 
-        SET customer_id = @customer_id, quotation_id = @quotation_id, invoice_number = @invoice_number, date = @date, due_date = @due_date, status = @status, notes = @notes, total = @total, updated_at = GETUTCDATE() 
+        UPDATE invoices
+        SET customer_id = @customer_id, quotation_id = @quotation_id, invoice_number = @invoice_number, date = @date, due_date = @due_date, status = @status, notes = @notes, total = @total, gct = @gct, credit = @credit, updated_at = GETUTCDATE()
         WHERE id = @id
       `);
 

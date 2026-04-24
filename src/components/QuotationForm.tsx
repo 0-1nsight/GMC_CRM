@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { X, Plus, Trash2, CreditCard as Edit } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Customer {
@@ -10,7 +10,9 @@ interface Customer {
 interface Service {
   id: string;
   name: string;
+  description: string;
   unit_price: number;
+  unit: string;
 }
 
 interface Quotation {
@@ -22,6 +24,7 @@ interface Quotation {
   status: string;
   notes: string | null;
   total: number;
+  discount?: number;
 }
 
 interface QuotationFormProps {
@@ -34,7 +37,8 @@ interface LineItem {
   id?: string;
   service_id: string | null;
   description: string;
-  quantity: number;
+  quantity: number | string;
+  quantityMode?: 'unit' | 'number';
   unit_price: number;
   total: number;
 }
@@ -48,10 +52,11 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
     date: new Date().toISOString().split('T')[0],
     valid_until: '',
     status: 'draft',
+    discount: 0,
     notes: '',
   });
   const [items, setItems] = useState<LineItem[]>([
-    { service_id: null, description: '', quantity: 1, unit_price: 0, total: 0 },
+    { service_id: null, description: '', quantity: 1, quantityMode: 'number', unit_price: 0, total: 0 },
   ]);
 
   useEffect(() => {
@@ -90,6 +95,7 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
       date: quotation.date,
       valid_until: quotation.valid_until || '',
       status: quotation.status,
+      discount: (quotation as any).discount || 0,
       notes: quotation.notes || '',
     });
 
@@ -100,13 +106,13 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
           id: item.id,
           service_id: item.service_id,
           description: item.description,
-          quantity: Number(item.quantity),
-          unit_price: Number(item.unit_price),
-          total: Number(item.total),
+          quantity: Number(item.quantity) || 0,
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || (Number(item.quantity) * Number(item.unit_price)) || 0,
         })));
       }
     } catch (error) {
-      console.error('Error loading quotation items:', error);
+      console.error('Error loading quotation data:', error);
     }
   }
 
@@ -132,9 +138,11 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
       newItems[index] = {
         ...newItems[index],
         service_id: serviceId,
-        description: service.name,
+        description: service.description,
         unit_price: Number(service.unit_price),
-        total: Number(service.unit_price) * newItems[index].quantity,
+        quantity: service.unit || '',
+        quantityMode: 'unit',
+        total: Number(service.unit_price) || 0,
       };
       setItems(newItems);
     }
@@ -144,10 +152,32 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
 
+    const mode = newItems[index].quantityMode || 'number';
     if (field === 'quantity' || field === 'unit_price') {
-      newItems[index].total = Number(newItems[index].quantity) * Number(newItems[index].unit_price);
+      if (mode === 'unit') {
+        newItems[index].total = Number(newItems[index].unit_price) || 0;
+      } else {
+        newItems[index].total = Number(newItems[index].quantity) * Number(newItems[index].unit_price);
+      }
     }
 
+    setItems(newItems);
+  }
+
+  function toggleQuantityMode(index: number) {
+    const newItems = [...items];
+    const item = newItems[index];
+    if (!item) return;
+    if (item.quantityMode === 'unit') {
+      item.quantityMode = 'number';
+      item.quantity = 1;
+      item.total = Number(item.unit_price) * Number(item.quantity);
+    } else {
+      const svc = services.find(s => s.id === item.service_id);
+      item.quantityMode = 'unit';
+      item.quantity = svc?.unit || '';
+      item.total = Number(item.unit_price) || 0;
+    }
     setItems(newItems);
   }
 
@@ -160,7 +190,9 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
   }
 
   function calculateTotal() {
-    return items.reduce((sum, item) => sum + Number(item.total), 0);
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    const discountValue = Number((formData as any).discount || 0) || 0;
+    return subtotal - discountValue;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -171,17 +203,26 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
       if (quotation) {
         await api.quotations.update(quotation.id, { ...formData, total });
 
-        for (const item of items.filter(i => i.id)) {
-          await api.quotationItems.delete(item.id!);
+        try {
+          const existing = await api.quotations.getItems(quotation.id);
+          if (Array.isArray(existing)) {
+            for (const dbItem of existing) {
+              if (dbItem && dbItem.id) {
+                await api.quotationItems.delete(dbItem.id);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to delete existing quotation items:', err);
         }
 
         const itemsToInsert = items.map(item => ({
           quotation_id: quotation.id,
           service_id: item.service_id,
           description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.total,
+          quantity: Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0),
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || ((Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0)) * Number(item.unit_price) || 0),
         }));
 
         for (const item of itemsToInsert) {
@@ -194,9 +235,9 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
           quotation_id: (newQuotation as any).id,
           service_id: item.service_id,
           description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.total,
+          quantity: Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0),
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || ((Number(item.quantity) || (item.quantityMode === 'unit' ? 1 : 0)) * Number(item.unit_price) || 0),
         }));
 
         for (const item of itemsToInsert) {
@@ -284,6 +325,17 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
               </select>
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Discount</label>
+              <input
+                type="number"
+                step="1.00"
+                min="0"
+                value={(formData as any).discount}
+                onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            <div className="col-span-1 md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">Notes</label>
               <input
                 type="text"
@@ -309,22 +361,35 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
           </div>
           <div className="space-y-4">
             {items.map((item, index) => (
-              <div key={index} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
+              <div key={index} className="grid grid-cols-12 gap-2 items-center p-4 bg-gray-50 rounded-lg">
+
+                {/* Service Column with Edit toggle */}
                 <div className="col-span-12 md:col-span-3">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Service</label>
-                  <select
-                    value={item.service_id || ''}
-                    onChange={(e) => handleServiceChange(index, e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">Custom item</option>
-                    {services.map((service) => (
-                      <option key={service.id} value={service.id}>
-                        {service.name}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-medium text-gray-700 mb-1 ml-10">Service</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleQuantityMode(index)}
+                      title={item.quantityMode === 'unit' ? 'Switch to numeric quantity' : 'Switch to unit quantity'}
+                      className="p-2 bg-white border border-gray-200 rounded-md text-gray-700 hover:bg-gray-100 flex-shrink-0"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+
+                    <select
+                      value={item.service_id || ''}
+                      onChange={(e) => handleServiceChange(index, e.target.value)}
+                      className="flex-1 min-w-0 px-2 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Custom item</option>
+                      {services.map((service) => (
+                        <option key={service.id} value={service.id}>{service.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
+                {/* Description */}
                 <div className="col-span-12 md:col-span-4">
                   <label className="block text-xs font-medium text-gray-700 mb-1">Description</label>
                   <input
@@ -332,49 +397,61 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
                     required
                     value={item.description}
                     onChange={(e) => updateItem(index, 'description', e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
                   />
                 </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Quantity</label>
+
+                {/* Quantity */}
+                <div className="col-span-6 md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Qty</label>
+                  {item.quantityMode === 'unit' ? (
+                    <div className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-gray-50 text-gray-700">
+                      {String(item.quantity || '')}
+                    </div>
+                  ) : (
+                    <input
+                      type="number"
+                      required
+                      value={Number(item.quantity)}
+                      onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+                    />
+                  )}
+                </div>
+
+                {/* Unit Price */}
+                <div className="col-span-6 md:col-span-1">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Price</label>
                   <input
                     type="number"
                     required
                     step="0.01"
-                    min="0"
-                    value={item.quantity}
-                    onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Unit Price</label>
-                  <input
-                    type="number"
-                    required
-                    step="0.01"
-                    min="0"
                     value={item.unit_price}
                     onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
                   />
                 </div>
-                <div className="col-span-3 md:col-span-1 flex items-end">
-                  <div className="text-sm font-semibold text-gray-900 py-2">
-                    ${item.total.toFixed(2)}
+
+                {/* Total & Trash */}
+                <div className="col-span-12 md:col-span-2 flex items-end justify-between md:justify-end gap-3 pb-1">
+                  <div className="text-right">
+                    <label className="block text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">Total</label>
+                    <div className="text-sm font-bold text-gray-900">
+                      ${item.total.toFixed(2)}
+                    </div>
                   </div>
-                </div>
-                <div className="col-span-1 flex items-end justify-end">
+
                   {items.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeItem(index)}
-                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   )}
                 </div>
+
               </div>
             ))}
           </div>
