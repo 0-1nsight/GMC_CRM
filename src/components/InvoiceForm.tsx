@@ -43,9 +43,17 @@ interface LineItem {
   total: number;
 }
 
+function formatDateForInput(dateString: string | null | undefined): string {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+}
+
 export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     customer_id: '',
     invoice_number: '',
@@ -92,8 +100,8 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
       setFormData({
         customer_id: invoice.customer_id,
         invoice_number: invoice.invoice_number,
-        date: invoice.date,
-        due_date: invoice.due_date || '',
+        date: formatDateForInput(invoice.date),
+        due_date: formatDateForInput(invoice.due_date),
         status: invoice.status,
         credit: (invoice as any).credit || 0,
         notes: invoice.notes || '',
@@ -201,13 +209,21 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     return subtotal - creditValue;
   }
 
+  function calculateGct() {
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    return Number((subtotal * 0.165).toFixed(2));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setSubmitError(null);
     try {
       const total = calculateTotal();
+      const gct = calculateGct();
 
       if (invoice) {
-        await api.invoices.update(invoice.id, { ...formData, total });
+        await api.invoices.update(invoice.id, { ...formData, total, gct });
 
         // Delete existing DB items for this invoice, then re-insert current form items
         try {
@@ -237,7 +253,7 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
           await api.invoiceItems.create(item);
         }
       } else {
-        const newInvoice = await api.invoices.create({ ...formData, total });
+        const newInvoice = await api.invoices.create({ ...formData, total, gct });
 
         const itemsToInsert = items.map(item => ({
           invoice_id: (newInvoice as any).id,
@@ -253,9 +269,12 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
         }
       }
 
-      onSave();
+      onSave(); 
     } catch (error) {
       console.error('Error saving invoice:', error);
+      setSubmitError('Failed to save invoice. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -502,12 +521,19 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
           </div>
         </div>
 
+        {submitError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-red-600">{submitError}</p>
+          </div>
+        )}
+
         <div className="flex gap-3">
           <button
             type="submit"
-            className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            disabled={submitting}
+            className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
           >
-            {invoice ? 'Update' : 'Create'} Invoice
+            {submitting ? 'Saving...' : (invoice ? 'Update' : 'Create') + ' Invoice'}
           </button>
           <button
             type="button"

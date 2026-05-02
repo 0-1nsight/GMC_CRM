@@ -61,7 +61,7 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
     setIsExporting(true);
     try {
       const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-      const gct = invoice.gct != null ? Number(invoice.gct) : subtotal * 0.165;
+      const gct = invoice.gct != null && Number(invoice.gct) > 0 ? Number(invoice.gct) : subtotal * 0.165;
       const credit = invoice.credit != null ? Number(invoice.credit) : 0;
       const finalTotal = subtotal + gct - credit;
 
@@ -132,7 +132,7 @@ export function InvoiceView({ invoiceId, onClose }: InvoiceViewProps) {
 
   const invoiceDate = new Date(invoice.date);
   const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const gct = invoice.gct != null ? Number(invoice.gct) : subtotal * 0.165;
+  const gct = invoice.gct != null && Number(invoice.gct) > 0 ? Number(invoice.gct) : subtotal * 0.165;
   const credit = invoice.credit != null ? Number(invoice.credit) : 0;
   const finalTotal = subtotal + gct - credit;
 

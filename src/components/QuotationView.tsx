@@ -59,7 +59,7 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
     setIsExporting(true);
     try {
       const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-      const gct = quotation.gct != null ? Number(quotation.gct) : subtotal * 0.165;
+      const gct = quotation.gct != null && Number(quotation.gct) > 0 ? Number(quotation.gct) : subtotal * 0.165;
       const discount = quotation.discount != null ? Number(quotation.discount) : 0;
       const finalTotal = subtotal + gct - discount;
 
@@ -129,7 +129,7 @@ export function QuotationView({ quotationId, onClose }: QuotationViewProps) {
 
   const quotationDate = new Date(quotation.date);
   const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const gct = quotation.gct != null ? Number(quotation.gct) : subtotal * 0.165;
+  const gct = quotation.gct != null && Number(quotation.gct) > 0 ? Number(quotation.gct) : subtotal * 0.165;
   const discount = quotation.discount != null ? Number(quotation.discount) : 0;
   const finalTotal = subtotal + gct - discount;
 

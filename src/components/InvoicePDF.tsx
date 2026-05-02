@@ -485,7 +485,7 @@ export function InvoicePDF({
   // Reusable table header row
   const TableHead = () => (
     <View style={s.tableHead}>
-      <Text style={s.thNum}>#</Text>
+      <Text style={s.thNum}>Item #</Text>
       <Text style={s.thDesc}>Description</Text>
       <Text style={s.thQty}>Qty</Text>
       <Text style={s.thPrice}>Unit Price</Text>

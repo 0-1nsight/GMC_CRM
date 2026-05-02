@@ -43,9 +43,17 @@ interface LineItem {
   total: number;
 }
 
+function formatDateForInput(dateString: string | null | undefined): string {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+}
+
 export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     customer_id: '',
     quotation_number: '',
@@ -92,8 +100,8 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
     setFormData({
       customer_id: quotation.customer_id,
       quotation_number: quotation.quotation_number,
-      date: quotation.date,
-      valid_until: quotation.valid_until || '',
+      date: formatDateForInput(quotation.date),
+      valid_until: formatDateForInput(quotation.valid_until),
       status: quotation.status,
       discount: (quotation as any).discount || 0,
       notes: quotation.notes || '',
@@ -195,13 +203,21 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
     return subtotal - discountValue;
   }
 
+  function calculateGct() {
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    return Number((subtotal * 0.165).toFixed(2));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setSubmitError(null);
     try {
       const total = calculateTotal();
+      const gct = calculateGct();
 
       if (quotation) {
-        await api.quotations.update(quotation.id, { ...formData, total });
+        await api.quotations.update(quotation.id, { ...formData, total, gct });
 
         try {
           const existing = await api.quotations.getItems(quotation.id);
@@ -229,7 +245,7 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
           await api.quotationItems.create(item);
         }
       } else {
-        const newQuotation = await api.quotations.create({ ...formData, total });
+        const newQuotation = await api.quotations.create({ ...formData, total, gct });
 
         const itemsToInsert = items.map(item => ({
           quotation_id: (newQuotation as any).id,
@@ -248,6 +264,9 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
       onSave();
     } catch (error) {
       console.error('Error saving quotation:', error);
+      setSubmitError('Failed to save quotation. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -463,12 +482,19 @@ export function QuotationForm({ quotation, onClose, onSave }: QuotationFormProps
           </div>
         </div>
 
+        {submitError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-red-600">{submitError}</p>
+          </div>
+        )}
+
         <div className="flex gap-3">
           <button
             type="submit"
-            className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+            disabled={submitting}
+            className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
           >
-            {quotation ? 'Update' : 'Create'} Quotation
+            {submitting ? 'Saving...' : (quotation ? 'Update' : 'Create') + ' Quotation'}
           </button>
           <button
             type="button"
