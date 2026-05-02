@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Plus, Trash2, Edit } from 'lucide-react';
+import { X, Plus, Trash2, CreditCard as Edit } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Customer {
@@ -54,6 +54,7 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
   const [services, setServices] = useState<Service[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [includeGct, setIncludeGct] = useState(true);
   const [formData, setFormData] = useState({
     customer_id: '',
     invoice_number: '',
@@ -106,6 +107,10 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
         credit: (invoice as any).credit || 0,
         notes: invoice.notes || '',
       });
+      // If the saved invoice has gct = 0, treat it as "GCT excluded"
+      if ((invoice as any).gct === 0 || (invoice as any).gct === '0') {
+        setIncludeGct(false);
+      }
 
       try {
         const data = await api.invoices.getItems(invoice.id);
@@ -203,15 +208,16 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
     setItems(items.filter((_, i) => i !== index));
   }
 
+  function calculateGct() {
+    if (!includeGct) return 0;
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    return Number((subtotal * 0.165).toFixed(2));
+  }
+
   function calculateTotal() {
     const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
     const creditValue = Number((formData as any).credit || 0) || 0;
-    return subtotal - creditValue;
-  }
-
-  function calculateGct() {
-    const subtotal = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    return Number((subtotal * 0.165).toFixed(2));
+    return subtotal + calculateGct() - creditValue;
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -514,9 +520,47 @@ export function InvoiceForm({ invoice, onClose, onSave }: InvoiceFormProps) {
             ))}
           </div>
           <div className="mt-6 pt-6 border-t border-gray-200 flex justify-end">
-            <div className="text-right">
-              <p className="text-sm text-gray-600 mb-1">Total Amount</p>
-              <p className="text-3xl font-bold text-gray-900">${calculateTotal().toFixed(2)}</p>
+            <div className="w-72">
+              <div className="space-y-2 mb-3">
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>Subtotal</span>
+                  <span>${items.reduce((s, i) => s + Number(i.total || 0), 0).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className={includeGct ? 'text-gray-600' : 'text-gray-400 line-through'}>
+                      GCT (16.5%)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIncludeGct(!includeGct)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                        includeGct ? 'bg-blue-600' : 'bg-gray-300'
+                      }`}
+                      title={includeGct ? 'Remove GCT' : 'Add GCT'}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          includeGct ? 'translate-x-4' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <span className={includeGct ? 'text-gray-700 font-medium' : 'text-gray-400'}>
+                    {includeGct ? `$${calculateGct().toFixed(2)}` : '$0.00'}
+                  </span>
+                </div>
+                {Number(formData.credit) > 0 && (
+                  <div className="flex justify-between text-sm text-red-600">
+                    <span>Credit Applied</span>
+                    <span>-${Number(formData.credit).toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-between items-center pt-3 border-t border-gray-200">
+                <p className="text-sm font-semibold text-gray-700">Total Due</p>
+                <p className="text-2xl font-bold text-gray-900">${calculateTotal().toFixed(2)}</p>
+              </div>
             </div>
           </div>
         </div>
