@@ -1,4 +1,4 @@
-const API_URL = 'http://192.168.0.119:3001';
+const API_URL = 'http://192.168.0.21:3001';
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}/api${endpoint}`, {
